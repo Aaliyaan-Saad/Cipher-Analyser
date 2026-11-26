@@ -1,0 +1,1242 @@
+Cipher Analyzer | COAL semester project | MASM x86 + Irvine32
+; Build as Win32/x86, NOT x64. See README.md before running.
+; Educational ciphers only. Uses only Irvine32.inc. File mode uses Irvine file routines and never overwrites.
+INCLUDE Irvine32.inc
+
+ReadFilePath PROTO, pPrompt:PTR BYTE, pBuffer:PTR BYTE
+
+MAX_TEXT EQU 120
+MAX_NUMBER EQU 8
+FILE_CHUNK EQU 4096
+MAX_PATH_TEXT EQU 240
+MAX_FILE_BYTES EQU 16777216
+
+.data
+menuText BYTE 13,10,"========== CIPHER ANALYZER ==========",13,10
+ BYTE "1. Caesar Cipher - Encrypt",13,10
+ BYTE "2. Caesar Cipher - Decrypt",13,10
+ BYTE "3. Analyze Caesar Cipher (all 26 keys)",13,10
+ BYTE "4. Simple XOR Demonstration",13,10
+ BYTE "5. Character and Frequency Analysis",13,10
+ BYTE "6. Compare Encryption Methods",13,10
+ BYTE "7. Encrypt or Decrypt a File",13,10
+ BYTE "8. XOR Known-plaintext Key Recovery",13,10
+ BYTE "9. XOR Brute Force (printable results)",13,10
+ BYTE "10. Exit",13,10,0
+choicePrompt BYTE "Select option (1-10): ",0
+textPrompt BYTE "Enter text (0-120 printable ASCII characters): ",0
+shiftPrompt BYTE "Enter Caesar shift (0-25): ",0
+keyPrompt BYTE "Enter XOR key (0-255, decimal): ",0
+badLineMsg BYTE "Invalid line: use printable ASCII within the stated length. Retry.",13,10,0
+badNumMsg BYTE "Invalid number: digits only, within the displayed range. Retry.",13,10,0
+pausePrompt BYTE 13,10,"Press Enter to return to the menu.",0
+originalLabel BYTE "Original : ",0
+cipherLabel BYTE "Encrypted: ",0
+plainLabel BYTE "Decrypted: ",0
+shiftLabel BYTE "Caesar shift: ",0
+keyLabel BYTE "XOR key (decimal): ",0
+hexLabel BYTE "XOR bytes (hex):",13,10,0
+recoveredLabel BYTE "Recovered: ",0
+emptyMsg BYTE "(empty)",0
+zeroMsg BYTE "Note: key 0 leaves the input unchanged.",13,10,0
+caesarNote BYTE "Caesar has only 26 keys including the identity shift.",13,10,0
+xorNote BYTE "A single-byte XOR key has only 256 possibilities.",13,10
+ BYTE "Hex is a display format, not an extra encryption layer.",13,10,0
+analyzeTitle BYTE "Trying each possible ORIGINAL encryption key:",13,10
+ BYTE "No automatic language detection: inspect the candidates yourself.",13,10,0
+candidateLabel BYTE "Key ",0
+colonLabel BYTE ": ",0
+analysisTitle BYTE "Character analysis (ASCII, case-insensitive letter frequencies)",13,10,0
+totalLabel BYTE "Total characters: ",0
+upperLabel BYTE "Uppercase letters: ",0
+lowerLabel BYTE "Lowercase letters: ",0
+lettersLabel BYTE "All letters: ",0
+digitsLabel BYTE "Digits: ",0
+spacesLabel BYTE "Spaces: ",0
+otherLabel BYTE "Other punctuation/symbols: ",0
+freqTitle BYTE "Letter : count (all 26 letters shown)",13,10,0
+frequentLabel BYTE "Most frequent letter(s): ",0
+noneLabel BYTE "none",0
+freqNote BYTE "Short messages need not follow typical language frequencies.",13,10,0
+compareTitle BYTE "Comparison: same input, two transformations",13,10,0
+rowHeader BYTE "Idx  Orig  ASCII  Caesar  XOR",13,10
+ BYTE "           hex     hex    hex",13,10,0
+pad3 BYTE "   ",0
+pad5 BYTE "     ",0
+passMsg BYTE "PASS",13,10,0
+failMsg BYTE "FAIL",13,10,0
+roundLabel BYTE "Round-trip check: ",0
+byeMsg BYTE "Goodbye. Unreadable text does not automatically mean secure text.",13,10,0
+hexDigits BYTE "0123456789ABCDEF"
+inputText BYTE MAX_TEXT+1 DUP(0)
+caesarText BYTE MAX_TEXT+1 DUP(0)
+xorText BYTE MAX_TEXT+1 DUP(0)
+recoveredText BYTE MAX_TEXT+1 DUP(0)
+numberText BYTE MAX_NUMBER+1 DUP(0)
+textLength DWORD 0
+shiftKey DWORD 0
+xorKey DWORD 0
+frequencies DWORD 26 DUP(0)
+counts DWORD 5 DUP(0)
+
+
+
+fileMenu BYTE "FILE MODE (maximum input: 16 MiB)",13,10
+ BYTE "1. Caesar encrypt file",13,10,"2. Caesar decrypt file",13,10
+ BYTE "3. XOR encrypt file",13,10,"4. XOR decrypt file",13,10
+ BYTE "5. Back",13,10,0
+fileChoicePrompt BYTE "Select file action (1-5): ",0
+fileInputPrompt BYTE "Input file path (1-240 ASCII characters, no quotes): ",0
+fileOutputPrompt BYTE "NEW output file path (must not already exist): ",0
+fileNotice BYTE "Use regular files. Existing output files are never overwritten.",13,10
+ BYTE "XOR files contain raw bytes. Use the same method and key to recover.",13,10
+ BYTE "There is no key verification: a wrong key can produce a file of garbage.",13,10,0
+filePathError BYTE "Enter a nonempty path of at most 240 printable ASCII characters.",13,10,0
+fileOpenError BYTE "Cannot open input file. Check the path and access permissions.",13,10,0
+fileExistsError BYTE "Output file already exists. Nothing was changed; choose a new name.",13,10,0
+fileCreateError BYTE "Cannot create output file. Check the folder and permissions.",13,10,0
+fileReadError BYTE "File read failed.",13,10,0
+fileWriteError BYTE "File write failed.",13,10,0
+fileCloseError BYTE "Could not close output file successfully.",13,10,0
+fileLimitError BYTE "Input exceeds the 16 MiB limit. Operation cancelled.",13,10,0
+filePartialWarning BYTE "WARNING: output may be incomplete. Delete it manually: ",0
+fileSuccess BYTE "File operation completed. Bytes written: ",0
+fileSavedLabel BYTE "Saved to: ",0
+fileInputPath BYTE MAX_PATH_TEXT+1 DUP(0)
+fileOutputPath BYTE MAX_PATH_TEXT+1 DUP(0)
+fileBuffer BYTE FILE_CHUNK+1 DUP(0)
+fileAction DWORD 0
+fileKey DWORD 0
+fileInputHandle DWORD -1
+fileOutputHandle DWORD -1
+fileBytesRead DWORD 0
+fileTotal DWORD 0
+fileErrorMessage DWORD 0
+fileCreated DWORD 0
+
+xHexPrompt BYTE "Ciphertext hex (1-120 bytes, e.g. 00 03 02 or 000302): ",0
+xHexBad BYTE "Invalid hex: enter complete byte pairs, optional spaces between pairs.",13,10,0
+xKnownTitle BYTE "Known plaintext must match the START of the ciphertext.",13,10
+ BYTE "Key = plaintext byte XOR ciphertext byte. Every pair must agree.",13,10,0
+xKnownBad BYTE "Plaintext must contain 1 to ciphertext-length printable characters.",13,10,0
+xMismatch BYTE "No consistent single-byte key: the supplied byte pairs disagree.",13,10,0
+xFound BYTE "Recovered XOR key (decimal): ",0
+xHexKey BYTE "Key (hex): ",0
+xRecovered BYTE "Full plaintext preview (. replaces nonprintable bytes): ",0
+xVerified BYTE "All supplied pairs agree. This does not prove the guessed plaintext is correct.",13,10,0
+xBruteTitle BYTE "Trying all 256 keys. Keeping only ASCII 32-126 (including space).",13,10
+ BYTE "Printable does not mean correct. Tabs, newlines and binary data are excluded.",13,10,0
+xCountLabel BYTE "Printable candidates: ",0
+xNoResults BYTE "No printable candidates. The plaintext may contain nonprintable bytes.",13,10,0
+xHexLine BYTE 361 DUP(0)
+xCipher BYTE MAX_TEXT+1 DUP(0)
+xLength DWORD 0
+xCandidate DWORD 0
+xCount DWORD 0
+
+.code
+main PROC
+mainMenu:
+    mov edx, OFFSET menuText
+    call WriteString
+    mov edx, OFFSET choicePrompt
+    mov ebx, 1
+    mov ecx, 10
+    call ReadBoundedNumber
+    cmp eax, 1
+    je menuEncrypt
+    cmp eax, 2
+    je menuDecrypt
+    cmp eax, 3
+    je menuAnalyze
+    cmp eax, 4
+    je menuXor
+    cmp eax, 5
+    je menuStats
+    cmp eax, 6
+    je menuCompare
+    cmp eax, 7
+    je menuFile
+    cmp eax, 8
+    je menuKnownXor
+    cmp eax, 9
+    je menuBruteXor
+    jmp menuExit
+menuFile:
+    call FileScreen
+    jmp menuContinue
+menuKnownXor:
+    call KnownXorScreen
+    jmp menuContinue
+menuBruteXor:
+    call BruteXorScreen
+    jmp menuContinue
+menuEncrypt:
+    xor eax, eax
+    call CaesarScreen
+    jmp menuContinue
+menuDecrypt:
+    mov eax, 1
+    call CaesarScreen
+    jmp menuContinue
+menuAnalyze:
+    call AnalyzeScreen
+    jmp menuContinue
+menuXor:
+    call XorScreen
+    jmp menuContinue
+menuStats:
+    call StatsScreen
+    jmp menuContinue
+menuCompare:
+    call CompareScreen
+menuContinue:
+    call PauseEnter
+    jmp mainMenu
+menuExit:
+    mov edx, OFFSET byeMsg
+    call WriteString
+    exit
+main ENDP
+
+; ReadLine: EDX=destination, ECX=maximum payload length.
+; OUT EAX=stored length, CF=1 if overlong/invalid, CF=0 otherwise.
+; Destination capacity MUST be maximum+1. Backspace supported.
+; ReadChar does not echo, so this routine echoes printable input itself.
+; Once invalid, drain the rest of that line up to Enter: no stale suffix
+; can become the next menu choice. Backspace cannot undo an invalid line.
+ReadLine PROC USES ebx ecx edx esi edi ebp
+    mov esi, edx
+    mov edi, ecx
+    xor ebx, ebx
+    xor ebp, ebp
+rlNext:
+    call ReadChar
+    cmp al, 13
+    je rlEnd
+    cmp al, 10
+    je rlNext
+    test ebp, ebp
+    jnz rlNext
+    cmp al, 8
+    je rlBackspace
+    cmp al, 0                  ; ignore function/arrow keys
+    je rlNext
+    cmp al, 32
+    jb rlInvalid
+    cmp al, 126
+    ja rlInvalid
+    cmp ebx, edi
+    jae rlInvalid
+    mov [esi+ebx], al
+    inc ebx
+    call WriteChar
+    jmp rlNext
+rlBackspace:
+    test ebx, ebx
+    jz rlNext
+    dec ebx
+    mov al, 8
+    call WriteChar
+    mov al, ' '
+    call WriteChar
+    mov al, 8
+    call WriteChar
+    jmp rlNext
+rlInvalid:
+    mov ebp, 1
+    jmp rlNext
+rlEnd:
+    mov BYTE PTR [esi+ebx], 0
+    call Crlf
+    mov eax, ebx
+    test ebp, ebp
+    jnz rlBad
+    clc
+    ret
+rlBad:
+    stc
+    ret
+ReadLine ENDP
+
+; EDX=prompt, EBX=min, ECX=max (<=255). Returns validated EAX.
+ReadBoundedNumber PROC USES ebx ecx edx esi edi ebp
+    mov edi, edx
+    mov ebp, ecx
+rbAgain:
+    mov edx, edi
+    call WriteString
+    mov edx, OFFSET numberText
+    mov ecx, MAX_NUMBER
+    call ReadLine
+    jc rbBad
+    mov ecx, eax
+    mov esi, OFFSET numberText
+    mov edx, ebp
+    call ParseUnsigned
+    jc rbBad
+    cmp eax, ebx
+    jb rbBad
+    ret
+rbBad:
+    mov edx, OFFSET badNumMsg
+    call WriteString
+    jmp rbAgain
+ReadBoundedNumber ENDP
+
+ReadText PROC USES eax ecx edx
+rtAgain:
+    mov edx, OFFSET textPrompt
+    call WriteString
+    mov edx, OFFSET inputText
+    mov ecx, MAX_TEXT
+    call ReadLine
+    jc rtBad
+    mov textLength, eax
+    ret
+rtBad:
+    mov edx, OFFSET badLineMsg
+    call WriteString
+    jmp rtAgain
+ReadText ENDP
+
+GetShift PROC USES eax ebx ecx edx
+    mov edx, OFFSET shiftPrompt
+    xor ebx, ebx
+    mov ecx, 25
+    call ReadBoundedNumber
+    mov shiftKey, eax
+    ret
+GetShift ENDP
+
+GetXorKey PROC USES eax ebx ecx edx
+    mov edx, OFFSET keyPrompt
+    xor ebx, ebx
+    mov ecx, 255
+    call ReadBoundedNumber
+    mov xorKey, eax
+    ret
+GetXorKey ENDP
+
+PauseEnter PROC USES eax edx
+    mov edx, OFFSET pausePrompt
+    call WriteString
+peWait:
+    call ReadChar
+    cmp al, 13
+    jne peWait
+    call Crlf
+    ret
+PauseEnter ENDP
+
+; WriteHexByte: AL=value. Exactly two digits, preserving registers.
+WriteHexByte PROC USES eax ebx
+    mov bl, al
+    ror al, 4                  ; high nibble into the low position
+    and eax, 0Fh
+    mov al, hexDigits[eax]
+    call WriteChar
+    mov al, bl
+    and eax, 0Fh
+    mov al, hexDigits[eax]
+    call WriteChar
+    ret
+WriteHexByte ENDP
+
+; ESI=binary buffer, ECX=byte length. Wrap every 16 bytes.
+PrintHexBuffer PROC USES eax ebx ecx esi
+    test ecx, ecx
+    jnz phStart
+    push edx
+    mov edx, OFFSET emptyMsg
+    call WriteString
+    pop edx
+    call Crlf
+    ret
+phStart:
+    xor ebx, ebx
+phNext:
+    mov al, [esi]
+    call WriteHexByte
+    inc esi
+    inc ebx
+    dec ecx
+    jz phEnd
+    test ebx, 15
+    jnz phSpace
+    call Crlf
+    jmp phNext
+phSpace:
+    mov al, ' '
+    call WriteChar
+    jmp phNext
+phEnd:
+    call Crlf
+    ret
+PrintHexBuffer ENDP
+
+; EDX=label, EAX=value. Prints one labeled decimal number.
+PrintNumberLine PROC USES eax edx
+    call WriteString
+    call WriteDec
+    call Crlf
+    ret
+PrintNumberLine ENDP
+
+; EDX=label, ESI=null-terminated printable text.
+PrintTextLine PROC USES eax edx
+    call WriteString
+    mov edx, esi
+    cmp BYTE PTR [esi], 0
+    jne ptPrint
+    mov edx, OFFSET emptyMsg
+ptPrint:
+    call WriteString
+    call Crlf
+    ret
+PrintTextLine ENDP
+
+; EAX=1 => PASS; else FAIL. Used for recoverability checks.
+PrintPassFail PROC USES edx
+    mov edx, OFFSET failMsg
+    cmp eax, 1
+    jne pfPrint
+    mov edx, OFFSET passMsg
+pfPrint:
+    call WriteString
+    ret
+PrintPassFail ENDP
+
+; EAX=0 encrypt, EAX=1 decrypt. Direction saved before input calls.
+CaesarScreen PROC USES eax ebx ecx edx esi edi ebp
+    mov ebp, eax
+    call ReadText
+    call GetShift
+    mov ebx, shiftKey
+    test ebp, ebp
+    jz csTransform
+    test ebx, ebx
+    jz csTransform
+    mov eax, 26
+    sub eax, ebx
+    mov ebx, eax
+csTransform:
+    mov esi, OFFSET inputText
+    mov edi, OFFSET caesarText
+    mov ecx, textLength
+    call CaesarTransform
+    mov edx, OFFSET originalLabel
+    call PrintTextLine
+    mov edx, OFFSET cipherLabel
+    test ebp, ebp
+    jz csPrint
+    mov edx, OFFSET plainLabel
+csPrint:
+    mov esi, OFFSET caesarText
+    call PrintTextLine
+    mov edx, OFFSET shiftLabel
+    mov eax, shiftKey
+    call PrintNumberLine
+    test eax, eax
+    jnz csNote
+    mov edx, OFFSET zeroMsg
+    call WriteString
+csNote:
+    mov edx, OFFSET caesarNote
+    call WriteString
+    ret
+CaesarScreen ENDP
+
+AnalyzeScreen PROC USES eax ebx ecx edx esi edi ebp
+    call ReadText
+    mov edx, OFFSET analyzeTitle
+    call WriteString
+    xor ebp, ebp
+asNext:
+    xor ebx, ebx
+    test ebp, ebp
+    jz asTransform
+    mov ebx, 26
+    sub ebx, ebp
+asTransform:
+    mov esi, OFFSET inputText
+    mov edi, OFFSET caesarText
+    mov ecx, textLength
+    call CaesarTransform
+    mov edx, OFFSET candidateLabel
+    call WriteString
+    cmp ebp, 10
+    jae asNumber
+    mov al, '0'
+    call WriteChar
+asNumber:
+    mov eax, ebp
+    call WriteDec
+    mov edx, OFFSET colonLabel
+    mov esi, OFFSET caesarText
+    call PrintTextLine
+    inc ebp
+    cmp ebp, 26
+    jb asNext
+    mov edx, OFFSET caesarNote
+    call WriteString
+    ret
+AnalyzeScreen ENDP
+
+MakeXor PROC USES ebx ecx esi edi
+    mov esi, OFFSET inputText
+    mov edi, OFFSET xorText
+    mov ecx, textLength
+    mov ebx, xorKey
+    call XorTransform
+    mov esi, OFFSET xorText
+    mov edi, OFFSET recoveredText
+    call XorTransform
+    ret
+MakeXor ENDP
+
+ShowXor PROC USES eax ecx edx esi edi
+    mov edx, OFFSET keyLabel
+    mov eax, xorKey
+    call PrintNumberLine
+    test eax, eax
+    jnz sxHex
+    mov edx, OFFSET zeroMsg
+    call WriteString
+sxHex:
+    mov edx, OFFSET hexLabel
+    call WriteString
+    mov esi, OFFSET xorText
+    mov ecx, textLength
+    call PrintHexBuffer
+    mov edx, OFFSET recoveredLabel
+    mov esi, OFFSET recoveredText
+    call PrintTextLine
+    mov edx, OFFSET roundLabel
+    call WriteString
+    mov esi, OFFSET inputText
+    mov edi, OFFSET recoveredText
+    mov ecx, textLength
+    call EqualBytes
+    call PrintPassFail
+    mov edx, OFFSET xorNote
+    call WriteString
+    ret
+ShowXor ENDP
+
+XorScreen PROC USES edx esi
+    call ReadText
+    call GetXorKey
+    call MakeXor
+    mov edx, OFFSET originalLabel
+    mov esi, OFFSET inputText
+    call PrintTextLine
+    call ShowXor
+    ret
+XorScreen ENDP
+
+StatsScreen PROC USES eax ebx ecx edx esi edi ebp
+    call ReadText
+    mov esi, OFFSET inputText
+    mov ecx, textLength
+    mov edi, OFFSET frequencies
+    mov edx, OFFSET counts
+    call CountCharacters
+    mov edx, OFFSET analysisTitle
+    call WriteString
+    mov edx, OFFSET totalLabel
+    mov eax, textLength
+    call PrintNumberLine
+    mov edx, OFFSET upperLabel
+    mov eax, counts
+    call PrintNumberLine
+    mov edx, OFFSET lowerLabel
+    mov eax, counts[4]
+    call PrintNumberLine
+    mov edx, OFFSET lettersLabel
+    add eax, counts
+    call PrintNumberLine
+    mov edx, OFFSET digitsLabel
+    mov eax, counts[8]
+    call PrintNumberLine
+    mov edx, OFFSET spacesLabel
+    mov eax, counts[12]
+    call PrintNumberLine
+    mov edx, OFFSET otherLabel
+    mov eax, counts[16]
+    call PrintNumberLine
+    mov edx, OFFSET freqTitle
+    call WriteString
+    xor ebx, ebx
+    xor ebp, ebp                ; maximum frequency
+ssFreq:
+    mov eax, ebx
+    add al, 'A'
+    call WriteChar
+    mov edx, OFFSET colonLabel
+    mov eax, frequencies[ebx*4]
+    call PrintNumberLine
+    cmp eax, ebp
+    jbe ssAdvance
+    mov ebp, eax
+ssAdvance:
+    inc ebx
+    cmp ebx, 26
+    jb ssFreq
+    mov edx, OFFSET frequentLabel
+    call WriteString
+    test ebp, ebp
+    jnz ssTies
+    mov edx, OFFSET noneLabel
+    call WriteString
+    jmp ssEnd
+ssTies:
+    xor ebx, ebx
+ssTieNext:
+    cmp frequencies[ebx*4], ebp
+    jne ssTieAdvance
+    mov eax, ebx
+    add al, 'A'
+    call WriteChar
+    mov al, ' '
+    call WriteChar
+ssTieAdvance:
+    inc ebx
+    cmp ebx, 26
+    jb ssTieNext
+ssEnd:
+    call Crlf
+    mov edx, OFFSET freqNote
+    call WriteString
+    ret
+StatsScreen ENDP
+
+CompareScreen PROC USES eax ebx ecx edx esi edi
+    call ReadText
+    call GetShift
+    call GetXorKey
+    mov esi, OFFSET inputText
+    mov edi, OFFSET caesarText
+    mov ecx, textLength
+    mov ebx, shiftKey
+    call CaesarTransform
+    call MakeXor
+    mov edx, OFFSET compareTitle
+    call WriteString
+    mov edx, OFFSET originalLabel
+    mov esi, OFFSET inputText
+    call PrintTextLine
+    mov edx, OFFSET cipherLabel
+    mov esi, OFFSET caesarText
+    call PrintTextLine
+    mov edx, OFFSET shiftLabel
+    mov eax, shiftKey
+    call PrintNumberLine
+    call ShowXor
+    mov edx, OFFSET rowHeader
+    call WriteString
+    xor ebx, ebx
+cmpRow:
+    cmp ebx, textLength
+    jae cmpEnd
+    ; Fixed three-digit, zero-based index (000..119).
+    mov eax, ebx
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    add al, '0'
+    call WriteChar
+    mov eax, edx
+    xor edx, edx
+    mov ecx, 10
+    div ecx
+    add al, '0'
+    call WriteChar
+    mov eax, edx
+    add al, '0'
+    call WriteChar
+    mov edx, OFFSET pad3
+    call WriteString
+    mov al, inputText[ebx]
+    call WriteChar
+    call WriteString
+    mov al, inputText[ebx]
+    call WriteHexByte
+    mov edx, OFFSET pad5
+    call WriteString
+    mov al, caesarText[ebx]
+    call WriteHexByte
+    mov edx, OFFSET pad3
+    call WriteString
+    mov al, xorText[ebx]
+    call WriteHexByte
+    call Crlf
+    inc ebx
+    jmp cmpRow
+cmpEnd:
+    mov edx, OFFSET caesarNote
+    call WriteString
+    ret
+CompareScreen ENDP
+
+
+
+
+
+; File mode reuses the two core transformations IN PLACE on a 4096-byte
+; buffer. The extra byte is for their terminator, which is NOT written.
+; No cipher header/key is stored. Caller must remember method and key.
+FileScreen PROC USES eax ebx ecx edx esi edi
+    mov edx, OFFSET fileMenu
+    call WriteString
+    mov edx, OFFSET fileChoicePrompt
+    mov ebx, 1
+    mov ecx, 5
+    call ReadBoundedNumber
+    cmp eax, 5
+    je fsDone
+    mov fileAction, eax
+    cmp eax, 2
+    ja fsXorKey
+    call GetShift
+    mov eax, shiftKey
+    cmp fileAction, 2
+    jne fsStoreKey
+    test eax, eax
+    jz fsStoreKey
+    mov ebx, 26
+    sub ebx, eax
+    mov eax, ebx
+    jmp fsStoreKey
+fsXorKey:
+    call GetXorKey
+    mov eax, xorKey
+fsStoreKey:
+    mov fileKey, eax
+    mov edx, OFFSET fileNotice
+    call WriteString
+    INVOKE ReadFilePath, ADDR fileInputPrompt, ADDR fileInputPath
+    INVOKE ReadFilePath, ADDR fileOutputPrompt, ADDR fileOutputPath
+    call ProcessFile
+fsDone:
+    ret
+FileScreen ENDP
+
+; pPrompt=prompt text, pBuffer=path buffer (241 bytes). Empty/overlong lines retry.
+ReadFilePath PROC USES eax ecx edx, pPrompt:PTR BYTE, pBuffer:PTR BYTE
+rfpAgain:
+    mov edx, pPrompt
+    call WriteString
+    mov edx, pBuffer
+    mov ecx, MAX_PATH_TEXT
+    call ReadLine
+    jc rfpBad
+    test eax, eax
+    jz rfpBad
+    ret
+rfpBad:
+    mov edx, OFFSET filePathError
+    call WriteString
+    jmp rfpAgain
+ReadFilePath ENDP
+
+; Uses Irvine32 file routines only. Output is refused if it already exists
+; (probed with OpenInputFile first), because CreateOutputFile would overwrite.
+; Values are kept in memory variables across Irvine calls.
+ProcessFile PROC USES eax ebx ecx edx esi edi
+    mov fileInputHandle, -1
+    mov fileOutputHandle, -1
+    mov fileCreated, 0
+    mov fileTotal, 0
+    mov edx, OFFSET fileInputPath
+    call OpenInputFile
+    cmp eax, -1
+    jne pfInOk
+    mov fileErrorMessage, OFFSET fileOpenError
+    jmp pfCleanup
+pfInOk:
+    mov fileInputHandle, eax
+    mov edx, OFFSET fileOutputPath
+    call OpenInputFile
+    cmp eax, -1
+    je pfCreate
+    call CloseFile
+    mov fileErrorMessage, OFFSET fileExistsError
+    jmp pfCleanup
+pfCreate:
+    mov edx, OFFSET fileOutputPath
+    call CreateOutputFile
+    cmp eax, -1
+    jne pfOutOk
+    mov fileErrorMessage, OFFSET fileCreateError
+    jmp pfCleanup
+pfOutOk:
+    mov fileOutputHandle, eax
+    mov fileCreated, 1
+pfRead:
+    mov eax, fileInputHandle
+    mov edx, OFFSET fileBuffer
+    mov ecx, FILE_CHUNK
+    call ReadFromFile
+    jnc pfReadOk
+    mov fileErrorMessage, OFFSET fileReadError
+    jmp pfCleanup
+pfReadOk:
+    test eax, eax
+    jz pfFinish
+    mov fileBytesRead, eax
+    mov ecx, eax
+    mov eax, MAX_FILE_BYTES
+    sub eax, fileTotal
+    cmp ecx, eax
+    jbe pfLimitOk
+    mov fileErrorMessage, OFFSET fileLimitError
+    jmp pfCleanup
+pfLimitOk:
+    mov esi, OFFSET fileBuffer
+    mov edi, esi
+    mov ebx, fileKey
+    cmp fileAction, 2
+    ja pfXor
+    call CaesarTransform
+    jmp pfWrite
+pfXor:
+    call XorTransform
+pfWrite:
+    mov eax, fileOutputHandle
+    mov edx, OFFSET fileBuffer
+    mov ecx, fileBytesRead
+    call WriteToFile
+    cmp eax, fileBytesRead
+    je pfWriteOk
+    mov fileErrorMessage, OFFSET fileWriteError
+    jmp pfCleanup
+pfWriteOk:
+    mov eax, fileBytesRead
+    add fileTotal, eax
+    jmp pfRead
+pfFinish:
+    mov eax, fileOutputHandle
+    mov fileOutputHandle, -1
+    call CloseFile
+    test eax, eax
+    jnz pfCloseOk
+    mov fileErrorMessage, OFFSET fileCloseError
+    jmp pfCleanup
+pfCloseOk:
+    mov eax, fileInputHandle
+    mov fileInputHandle, -1
+    call CloseFile
+    mov edx, OFFSET fileSuccess
+    mov eax, fileTotal
+    call PrintNumberLine
+    mov edx, OFFSET fileSavedLabel
+    mov esi, OFFSET fileOutputPath
+    call PrintTextLine
+    ret
+pfCleanup:
+    cmp fileOutputHandle, -1
+    je pfCloseIn
+    mov eax, fileOutputHandle
+    mov fileOutputHandle, -1
+    call CloseFile
+pfCloseIn:
+    cmp fileInputHandle, -1
+    je pfReport
+    mov eax, fileInputHandle
+    mov fileInputHandle, -1
+    call CloseFile
+pfReport:
+    mov edx, fileErrorMessage
+    call WriteString
+    cmp fileCreated, 0
+    je pfDone
+    mov edx, OFFSET filePartialWarning
+    mov esi, OFFSET fileOutputPath
+    call PrintTextLine
+pfDone:
+    ret
+ProcessFile ENDP
+
+; Convert one ASCII hex digit in AL. CF=1 on invalid input.
+HexNibble PROC
+    cmp al, '0'
+    jb hnBad
+    cmp al, '9'
+    jbe hnDigit
+    or al, 20h
+    cmp al, 'a'
+    jb hnBad
+    cmp al, 'f'
+    ja hnBad
+    sub al, 'a'
+    add al, 10
+    clc
+    ret
+hnDigit:
+    sub al, '0'
+    clc
+    ret
+hnBad:
+    stc
+    ret
+HexNibble ENDP
+
+; Strict byte pairs with optional spaces BETWEEN pairs. Length-based output.
+ReadCipherHex PROC USES eax ebx ecx edx esi edi ebp
+rchAgain:
+    mov edx, OFFSET xHexPrompt
+    call WriteString
+    mov edx, OFFSET xHexLine
+    mov ecx, 360
+    call ReadLine
+    jc rchBad
+    mov esi, OFFSET xHexLine
+    mov edi, OFFSET xCipher
+    mov ecx, eax
+    xor ebp, ebp
+rchNext:
+    test ecx, ecx
+    jz rchEnd
+    mov al, [esi]
+    cmp al, ' '
+    je rchSpace
+    cmp ebp, MAX_TEXT
+    jae rchBad
+    cmp ecx, 2
+    jb rchBad
+    call HexNibble
+    jc rchBad
+    rol al, 4                  ; first digit into the high nibble
+    mov bl, al
+    mov al, [esi+1]
+    call HexNibble
+    jc rchBad
+    or al, bl
+    mov [edi], al
+    inc edi
+    inc ebp
+    add esi, 2
+    sub ecx, 2
+    jmp rchNext
+rchSpace:
+    inc esi
+    dec ecx
+    jmp rchNext
+rchEnd:
+    test ebp, ebp
+    jz rchBad
+    mov xLength, ebp
+    mov BYTE PTR [edi], 0
+    ret
+rchBad:
+    mov edx, OFFSET xHexBad
+    call WriteString
+    jmp rchAgain
+ReadCipherHex ENDP
+
+KnownXorScreen PROC USES eax ebx ecx edx esi edi
+    mov edx, OFFSET xKnownTitle
+    call WriteString
+    call ReadCipherHex
+kxPlain:
+    call ReadText
+    mov ecx, textLength
+    test ecx, ecx
+    jz kxBad
+    cmp ecx, xLength
+    ja kxBad
+    mov esi, OFFSET inputText
+    mov edi, OFFSET xCipher
+    mov bl, [esi]
+    xor bl, [edi]
+kxCheck:
+    mov al, [esi]
+    xor al, [edi]
+    cmp al, bl
+    jne kxMismatch
+    inc esi
+    inc edi
+    dec ecx
+    jnz kxCheck
+    movzx eax, bl
+    mov xCandidate, eax
+    mov edx, OFFSET xFound
+    call WriteString
+    mov eax, xCandidate
+    call WriteDec
+    call Crlf
+    mov edx, OFFSET xHexKey
+    call WriteString
+    mov eax, xCandidate
+    call WriteHexByte
+    call Crlf
+    mov edx, OFFSET xVerified
+    call WriteString
+    mov esi, OFFSET xCipher
+    mov edi, OFFSET recoveredText
+    mov ecx, xLength
+    mov ebx, xCandidate
+    call XorTransform
+    mov edx, OFFSET xRecovered
+    call WriteString
+    mov esi, OFFSET recoveredText
+    mov ecx, xLength
+kxPreview:
+    mov al, [esi]
+    cmp al, 32
+    jb kxDot
+    cmp al, 126
+    jbe kxPrint
+kxDot:
+    mov al, '.'
+kxPrint:
+    call WriteChar
+    inc esi
+    dec ecx
+    jnz kxPreview
+    call Crlf
+    mov esi, OFFSET recoveredText
+    mov ecx, xLength
+    call PrintHexBuffer
+    ret
+kxBad:
+    mov edx, OFFSET xKnownBad
+    call WriteString
+    jmp kxPlain
+kxMismatch:
+    mov edx, OFFSET xMismatch
+    call WriteString
+    ret
+KnownXorScreen ENDP
+
+BruteXorScreen PROC USES eax ebx ecx edx esi edi
+    mov edx, OFFSET xBruteTitle
+    call WriteString
+    call ReadCipherHex
+    mov xCandidate, 0
+    mov xCount, 0
+bxKey:
+    mov esi, OFFSET xCipher
+    mov edi, OFFSET recoveredText
+    mov ecx, xLength
+    mov ebx, xCandidate
+    call XorTransform
+    mov esi, OFFSET recoveredText
+bxCheck:
+    mov al, [esi]
+    cmp al, 32
+    jb bxNext
+    cmp al, 126
+    ja bxNext
+    inc esi
+    dec ecx
+    jnz bxCheck
+    inc xCount
+    mov edx, OFFSET candidateLabel
+    call WriteString
+    mov eax, xCandidate
+    call WriteDec
+    mov edx, OFFSET colonLabel
+    call WriteString
+    mov edx, OFFSET recoveredText
+    call WriteString
+    call Crlf
+bxNext:
+    inc xCandidate
+    cmp xCandidate, 256
+    jb bxKey
+    mov edx, OFFSET xCountLabel
+    call WriteString
+    mov eax, xCount
+    call WriteDec
+    call Crlf
+    cmp xCount, 0
+    jne bxDone
+    mov edx, OFFSET xNoResults
+    call WriteString
+bxDone:
+    ret
+BruteXorScreen ENDP
+
+; CipherCore.inc - algorithms only; no console or operating-system calls.
+; All buffers supplied by callers must have enough capacity.
+; USES preserves listed registers. EAX and flags are return/scratch values.
+
+; CaesarTransform
+; IN: ESI=source, EDI=destination (length+1 bytes), ECX=length,
+;     EBX=forward shift in 0..25. Decrypt by passing (26-key) mod 26.
+; OUT: null-terminated destination. Nonletters unchanged. In-place is safe.
+CaesarTransform PROC USES ebx ecx edx esi edi
+    test ecx, ecx
+    jz ctDone
+ctNext:
+    mov al, [esi]
+    cmp al, 'A'
+    jb ctStore
+    cmp al, 'Z'
+    jbe ctUpper
+    cmp al, 'a'
+    jb ctStore
+    cmp al, 'z'
+    ja ctStore
+    mov dl, 'a'
+    jmp ctShift
+ctUpper:
+    mov dl, 'A'
+ctShift:
+    sub al, dl                 ; letter -> index 0..25
+    add al, bl                 ; index -> 0..50
+    cmp al, 26
+    jb ctRestore
+    sub al, 26                 ; one subtraction is sufficient
+ctRestore:
+    add al, dl
+ctStore:
+    mov [edi], al
+    inc esi
+    inc edi
+    dec ecx
+    jnz ctNext
+ctDone:
+    mov BYTE PTR [edi], 0
+    ret
+CaesarTransform ENDP
+
+; XorTransform
+; IN: ESI=source, EDI=destination (length+1 bytes), ECX=length, BL=key.
+; OUT: destination bytes and a convenience terminator AFTER the payload.
+; ALWAYS use ECX/length for ciphertext: a zero byte can occur inside it.
+XorTransform PROC USES ebx ecx esi edi
+    test ecx, ecx
+    jz xtDone
+xtNext:
+    mov al, [esi]
+    xor al, bl
+    mov [edi], al
+    inc esi
+    inc edi
+    dec ecx
+    jnz xtNext
+xtDone:
+    mov BYTE PTR [edi], 0
+    ret
+XorTransform ENDP
+
+; CountCharacters
+; IN: ESI=source, ECX=length, EDI=26 DWORD frequencies,
+;     EDX=5 DWORD counts: uppercase, lowercase, digits, spaces, other.
+; OUT: both arrays reset then filled; frequencies combine letter case.
+CountCharacters PROC USES ebx ecx edx esi edi ebp
+    mov ebx, edx
+    xor eax, eax
+    xor ebp, ebp
+ccClearFreq:
+    mov DWORD PTR [edi+ebp*4], 0
+    inc ebp
+    cmp ebp, 26
+    jb ccClearFreq
+    xor ebp, ebp
+ccClearCounts:
+    mov DWORD PTR [ebx+ebp*4], 0
+    inc ebp
+    cmp ebp, 5
+    jb ccClearCounts
+    test ecx, ecx
+    jz ccDone
+ccNext:
+    movzx eax, BYTE PTR [esi]
+    cmp al, 'A'
+    jb ccDigit
+    cmp al, 'Z'
+    jbe ccUpper
+    cmp al, 'a'
+    jb ccOther
+    cmp al, 'z'
+    ja ccOther
+    inc DWORD PTR [ebx+4]
+    sub eax, 'a'
+    jmp ccLetter
+ccUpper:
+    inc DWORD PTR [ebx]
+    sub eax, 'A'
+ccLetter:
+    inc DWORD PTR [edi+eax*4]
+    jmp ccAdvance
+ccDigit:
+    cmp al, '0'
+    jb ccSpace
+    cmp al, '9'
+    ja ccOther
+    inc DWORD PTR [ebx+8]
+    jmp ccAdvance
+ccSpace:
+    cmp al, ' '
+    jne ccOther
+    inc DWORD PTR [ebx+12]
+    jmp ccAdvance
+ccOther:
+    inc DWORD PTR [ebx+16]
+ccAdvance:
+    inc esi
+    dec ecx
+    jnz ccNext
+ccDone:
+    ret
+CountCharacters ENDP
+
+; ParseUnsigned
+; IN: ESI=ASCII digits, ECX=length, EDX=maximum (0..255 only).
+; OUT: CF=0/EAX=value on success, CF=1 on empty/invalid/out-of-range.
+; Checking the bound after EACH digit prevents 32-bit overflow because
+; the previous partial value never exceeds 255. Signs/spaces forbidden.
+ParseUnsigned PROC USES ebx ecx esi edi
+    xor eax, eax
+    test ecx, ecx
+    jz puBad
+puNext:
+    movzx ebx, BYTE PTR [esi]
+    cmp bl, '0'
+    jb puBad
+    cmp bl, '9'
+    ja puBad
+    sub ebx, '0'
+    mov edi, eax               ; value*10 = (value<<3) + (value<<1)
+    shl eax, 3
+    shl edi, 1
+    add eax, edi
+    add eax, ebx
+    cmp eax, edx
+    ja puBad
+    inc esi
+    dec ecx
+    jnz puNext
+    clc
+    ret
+puBad:
+    stc
+    ret
+ParseUnsigned ENDP
+
+; EqualBytes: ESI/EDI=buffers, ECX=length; EAX=1 if equal else 0.
+; Length-based comparison supports embedded zero bytes.
+EqualBytes PROC USES ecx edx esi edi
+    mov eax, 1
+    test ecx, ecx
+    jz eqDone
+eqNext:
+    mov dl, [esi]
+    cmp dl, [edi]
+    jne eqNo
+    inc esi
+    inc edi
+    dec ecx
+    jnz eqNext
+    ret
+eqNo:
+    xor eax, eax
+eqDone:
+    ret
+EqualBytes ENDP
+
+END main
